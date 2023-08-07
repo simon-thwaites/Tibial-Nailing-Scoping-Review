@@ -1,0 +1,2557 @@
+---
+title: "Scoping Sandpit"
+author: "Simon Thwaites"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+always_allow_html: yes
+---
+
+```{r setup, include = FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+## LIBRARIES
+library(tidyverse)
+library(knitr)
+library(kableExtra) # for extra kable functions
+library(ggthemes)   # for ggplot themes
+library(patchwork)  # for patchwork plots
+library(naniar)     # for nan handling
+library(scales)     # for log scale ticks
+library(mgsub)      # for fast string replacement
+library(readr)      # for beter csv file writing
+# library(officer)    # for powerpoint fig 
+# library(rvg)        # for powerpoint fig 
+# library(here)       # for powerpoint fig
+library(export)       # not on cran, have to download using: BiocManager::install("tomwenseleers/export")
+# see https://github.com/tomwenseleers/export/issues/43
+library(gridExtra)
+library(grid)
+library(gridtext)     # for the manual axis labels
+library(magick)        # for splicing pics
+
+## GET DATA
+path.src <- getwd()
+path.data <- paste0(path.src, "/data")
+path.fig <- paste0(path.src, "/figures")
+path.aaos <- paste0(path.src, "/aaos")
+
+# Get a list with all csv files from the directory that is set as 'working directory'
+# should only be one in the directory, rest should be moved to 'Archive' folder
+filelist = list.files(path = path.data, pattern="*.csv$")
+
+covData <- read.csv(paste0(path.data, "/", filelist), encoding = 'UTF-8') # load the covidence data
+
+removeCols <- c("Covidence..", "Reviewer.Name") # columns to remove
+covData <- covData %>%  # remove the columns
+  select(-removeCols)
+
+# Tidy up the strings "
+covData <- covData %>% 
+  mutate(across(where(is.character), str_remove_all, pattern = fixed("Other: "))) %>% # remove instances of "Other: "
+  mutate(across(where(is.character), trimws)) # remove whitespace
+
+# for compact analysis
+shortCols <-c("Study.ID", "Year.of.publication", 
+              "Country.in.which.the.study.conducted", "Level.of.Evidence","Nail.focus",
+              "Study.design", "Approach.1",	"Approach.2",	"Approach.3", "Total.number.of.participants", "Outcomes.used")
+
+shortData <- covData %>% 
+  select(all_of(shortCols))
+
+shortData.colnames <- c("studyID", "year",
+                        "country", "loe", "focus",
+                        "design", "a1",	"a2",	"a3", "n", "outcomes")
+
+colnames(shortData) <- shortData.colnames
+
+# pubmed general fracture data
+pubmedData <- read.csv("PubMed_Timeline_Results_by_Year.csv", skip = 1, header = TRUE)
+
+# 8 x colourblind pallete w grey and black:
+# cbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999", "#000000", "#A9A9A9")
+cbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#882255", "#000000", "#999999")#, "#000000", "#A9A9A9")
+
+# plot themes
+myTheme <- theme_clean() %+replace%
+  theme(plot.background = element_rect(colour = NA),
+        panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        text = element_text(family = "Arial")
+  )# remove plot border from theme_clean
+
+myFollowTheme <- myTheme %+replace%
+  theme(
+    # panel.grid.major.x = element_line(colour = "grey",
+    #                                   linetype = "solid"),
+    # panel.grid.minor.x = element_line(colour = "grey",
+    #                                   linetype = "solid"),
+    # panel.grid.major.y= element_line(colour = "grey",
+    #                                  linetype = "dotted")
+    
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+# for the vertical geom_bar plots
+myThemeVert <- myTheme %+replace%
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_blank()
+        # panel.grid.major.x = element_line(colour = "grey",
+        #                                  linetype = "dotted")
+  )
+
+smallText <- 6.5
+n.invivo <- 152 # 147 + 5 new in vivo studies from latest additions
+```
+
+```{r results="asis"}
+cat("
+<style>
+caption {
+      color: black;
+      font-weight: bold;
+    }
+</style>
+")
+```
+
+## Testing output from Covidence consensus data
+(w colourblind pallette)
+
+### Publications by year and nailing focus
+(Incl. Cadaveric)
+
+```{r year}
+shortData$focus <- as.factor(shortData$focus)
+
+# shortData %>% 
+#   ggplot(aes(x = year, fill = focus)) + 
+# 	geom_bar(stat = 'count') +
+#   # geom_line(data = pubmedData, aes(x = Year, y = Count)) +
+#   scale_fill_manual(values=cbPalette) +
+#   labs(y = "Number of Publications", x = "Year of Publication") +
+#   guides(fill=guide_legend(title = "Study Focus")) +
+# 	theme_minimal()
+
+plotPubMed <- pubmedData %>% 
+  filter(Year >= min(shortData$year)) %>% 
+  filter(Year <= max(shortData$year))
+
+## original 5x5 sizing
+# p <- ggplot() +
+#   geom_bar(data = plotPubMed, aes(x = Year, y = Count/1000, colour = 'light grey', alpha = 0), stat = 'identity', fill = 'light grey', alpha = 0.5) +
+#   scale_colour_manual(values = 'light grey',
+#                       name = "All Fractures",
+#                       labels = expression(n[publications]%*%10^{-3})) +
+#   # guides(colour = guide_legend(title = "All Fractures"),
+#   #        labels = expression(n[publications]*10)) +
+#   geom_bar(data = shortData, aes(x = year, fill = focus), stat = 'count') +
+#   scale_fill_manual(values = cbPalette) +
+#   labs(y = "Number of Publications", x = "Year of Publication") +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myTheme + theme(
+#     axis.title.x = element_text(size = 15),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     legend.position = c(0.25, 0.65),
+#     # legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.margin = margin(2, 2, 2, 2),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 11),
+#     legend.key.size = unit(0.5,"cm")
+#   )
+
+## 3x3 sizing
+xSize <-  11
+ySize <- 11
+axisSize <- 9
+legendSize <- 7
+keySize <- 0.25
+p <- ggplot() +
+  geom_bar(data = plotPubMed, aes(x = Year, y = Count/1000, colour = 'light grey', alpha = 0), stat = 'identity', fill = 'light grey', alpha = 0.5) +
+  scale_colour_manual(values = 'light grey',
+                      name = "All Fractures",
+                      labels = expression(n[publications]%*%10^{-3})) +
+  # guides(colour = guide_legend(title = "All Fractures"),
+  #        labels = expression(n[publications]*10)) +
+  geom_bar(data = shortData, aes(x = year, fill = focus), stat = 'count') +
+  scale_fill_manual(values = cbPalette) +
+  labs(y = "Number of Publications", x = "Year of Publication") +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myTheme + theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = ySize),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    legend.position = c(0.25, 0.65),
+    # legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+    legend.margin = margin(2, 2, 2, 2),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.key.size = unit(keySize,"cm")
+  )
+
+p
+### manuscript
+setwd(path.fig)
+
+figWidth <- 3
+figHeight <- 3
+fileName <- "publications-by-year"
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+
+## doesn't have good quality, instead write to svg and use the cloud converter to change to eps file format
+# setwd(path.fig)
+# ggsave(
+#   paste0(fileName,".eps"),
+#   plot = p,
+#   path = path.fig,
+#   scale = 1,
+#   width = figWidth,
+#   height = figHeight,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 350,
+#   device = cairo_ps
+# )
+
+### try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+# graph2vector(x = p, file = fileName, type = "PDF",
+#              width = figWidth, height = figHeight, fallback_resolution = 350)
+
+# graph2ppt(x = p, file = fileName,
+# width = figWidth, height = figHeight)
+# setwd(path.src)
+
+
+# knitr::include_graphics(paste0(path.fig, "/publications-by-year.png"))
+
+## aaos sizing ####
+# p <- ggplot() + 
+#   geom_bar(data = plotPubMed, aes(x = Year, y = Count/1000, colour = 'light grey', alpha = 0), stat = 'identity', fill = 'light grey', alpha = 0.5) +
+#   scale_colour_manual(values = 'light grey', 
+#                       name = "All Fractures", 
+#                       labels = expression(n[publications]%*%10^{-3})) +
+#   # guides(colour = guide_legend(title = "All Fractures"),
+#   #        labels = expression(n[publications]*10)) +
+#   geom_bar(data = shortData, aes(x = year, fill = focus), stat = 'count') +
+#   # geom_line(data = pubmedData, aes(x = Year, y = Count)) +
+#   scale_fill_manual(values = cbPalette) +
+#   labs(y = "Number of Publications", 
+#        x = "Year of Publication",
+#        caption = "Fig. 7: Publications by year and IM nailing focus.") +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myTheme + theme(
+#     axis.title.x = element_text(size = smallText+2),
+#     axis.title.y = element_text(size = smallText+2),
+#     axis.text.x = element_text(size = smallText),
+#     axis.text.y = element_text(size = smallText),
+#     plot.caption = element_text(size = 6),
+#     legend.title = element_text(size = smallText),
+#     legend.text = element_text(size = smallText),
+#     legend.position = c(0.25, 0.65),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.key.size = unit(0.2,"cm"),
+#     legend.key.height = unit(0.2, "cm"),
+#     legend.key.width =unit(0.2, "cm"))
+# 
+# ggsave(
+#   "publicationsByYearAAOS.jpg",
+#   plot = p,
+#   # device = NULL,
+#   # path = path.fig,
+#   path = path.aaos,
+#   # scale = 0.7,
+#   # width = 609,
+#   # height = figHeight.5,
+#   width = 3,
+#   height = 3,
+#   # units = "px",
+#   dpi = 350
+# )
+```
+\newpage
+
+### By country
+(Incl. Cadaveric)
+
+```{r kableData}
+shortData$country <- as.factor(shortData$country)
+# threshold <- 4
+# 
+# # reduced subset of the data
+# other.grouped.df <- shortData %>%
+#   select(country)
+# 
+# # group and get the counts
+# totals <- shortData %>%
+#   group_by(country) %>%
+#   summarise(total = n())
+# 
+# # anything with a count = 1, group as "Other"
+# collapsedTotals <- totals %>%
+#   count(outcomes = fct_collapse(as.character(outcomes), 
+#       Other = unique(as.character(outcomes)[total < threshold])),
+#       wt = total, name = "total")
+
+
+countryData <- shortData %>%
+  group_by(country) %>%
+  summarise(n = n()) %>% 
+  arrange(desc(n)) %>% 
+  # mutate(per = paste0("(", round(n/sum(n)*100, 0), ")")) # for pdf
+  mutate(per = format(round(n/sum(n)*100, 1), nsmall = 1))
+# mutate(per = paste0("\\(", round(n/sum(n)*100, 0), ")")) # for html
+# need double backslash here to escape the parentheses which R thinks is something weird ... but now I don't need it?
+# see: https://stackoverflow.com/questions/59644048/whole-number-in-brackets-gets-coerced-into-unusual-format-in-kable-table-in-rmar 
+
+colnames(countryData) <- c("Country", "n", "(%)")
+
+# countryData %>% 
+#   kbl() %>% 
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+# 
+# countryData %>% 
+#   kable(booktabs = T, escape = TRUE) 
+
+# countryData %>% kable("html",
+#                       # booktabs = T,
+#                       # col.names =c("Inclusion Criteria", "Exclusion Criteria"),
+#                       caption = "<b>Table 2: Country of origin</b>") %>%
+#   kable_styling(font_size = 14) %>%
+#   row_spec(0, color='black') %>%
+#   column_spec(1:3, color='black') %>%
+#   # as_image(width = 3,
+#   #          file = paste0(path.aaos, "/test.png"))
+#   save_kable(paste0(path.aaos, "/CountryTable.png"),
+#              zoom = 3)
+
+## country data with other count
+threshold <- 4 
+
+# anything with a count < threshold, group as "Other"
+collapsedCountryTotals <- countryData %>%
+  count(Country = fct_collapse(as.character(Country), 
+                               Other = unique(as.character(Country)[n < threshold])),
+        wt = n, name = "n") %>% 
+  arrange(desc(n)) %>% 
+  # mutate(per = paste0("(", round(n/sum(n)*100, 1), ")"))
+  mutate(per = format(round(n/sum(n)*100, 1), nsmall = 1))
+
+## str_detect doesn't like brackets so need to escape these with a \\
+## so do some replacement
+checkStrings <- as.character(collapsedCountryTotals$Country)
+checkStrings <- paste0("^", checkStrings, "$") # Use anchors. ^ Asserts that we are at the start. $ Asserts that we are at the end.
+
+# do the replacements
+countryData <- countryData %>%
+  mutate(if_other = case_when(
+    # if the outcomes appear in the collapsed list, use them in the new collumn, if not they will go to "other
+    # need to create the pattern matching list here with OR | statements between each character vector
+    str_detect(as.character(countryData$Country), paste(checkStrings, collapse = "|")) ~ as.character(Country),
+    TRUE ~ "Other" # anything else goes to "other"
+  ))
+
+collapsedCountryTotals %>% kable(booktabs = T, escape = TRUE)
+
+## can't seem to get the parentheses to print to file properly ... sp just replace with blank "" for now
+
+# collapsedCountryTotals$per <- gsub("(", "", collapsedCountryTotals$per, fixed = TRUE) # "Fixed = TRUE" disables regex)
+# collapsedCountryTotals$per <- gsub(")", "", collapsedCountryTotals$per, fixed = TRUE)
+
+## write main table
+write_csv(collapsedCountryTotals, paste0(path.fig, "/Country_totals.csv"))
+
+## write other table
+write_other.country.df <- countryData %>% 
+  filter(if_other == "Other") %>% 
+  select(!if_other)
+
+colnames(write_other.country.df) <- c("Country", "n", "per")
+
+# write_other.country.df$per <- gsub("(", "", write_other.country.df$per, fixed = TRUE) # "Fixed = TRUE" disables regex)
+# write_other.country.df$per <- gsub(")", "", write_other.country.df$per, fixed = TRUE)
+
+write_csv(write_other.country.df, paste0(path.fig, "/Country_totals_listOthers.csv")) # write the file
+
+```
+\newpage
+
+### Level of Evidence
+
+```{r levelOFEvidence}
+# need to do some splitting of some of the studies that have cadaveric and other components
+# this is Carr 1991 and Schumaier 2018.
+source("splitDoubleStudyDesigns.R") # source the splitting script
+
+shortData <- shortData %>% # remove the old rows
+  filter(studyID != "Carr 1991") %>% 
+  filter(studyID != "Schumaier 2018")
+
+shortData <- shortData %>% 
+  rbind(Carr1991.short.1, Carr1991.short.2, Schumaier2018.short.1, Schumaier2018.short.2) # bind the new rows
+
+
+shortData$loe <- as.factor(shortData$loe)
+
+# group and get the counts
+totals <- shortData %>% 
+  filter(loe != "NA") %>%
+  group_by(loe) %>%
+  summarise(total = n())
+totals <- totals %>% 
+  mutate(per = paste0(total, " (", round(total / n.invivo * 100, 0), "%)"))
+
+study.designs.df <- shortData %>% 
+  # filter(loe != "NA") %>%
+  group_by(design) %>%
+  summarise(total = n())%>% 
+  arrange(desc(total)) %>% 
+  # mutate(per = paste0("(", round(n/sum(n)*100, 0), ")")) # for pdf
+  mutate(per = format(round(total/181*100, 1))) # 174 + 2 extra for the double studies = 176 studies from 174 articles OLD. NEW = 179 + 2 = 181 
+write_csv(study.designs.df, paste0(path.fig, "/studyDesigns.csv")) # write the file
+
+## 5x5 sizing
+# p <- shortData %>% 
+#   filter(loe != "NA") %>% 
+#   ggplot(aes(x = loe, fill = focus)) + 
+#   geom_bar(stat = 'count', width = 0.45) +
+#   geom_text(
+#     data = totals, aes(x = loe, label = per, y = total, fill = NULL), size = 3.5, nudge_x = 0, nudge_y = 2
+#   ) +
+#   scale_fill_manual(values=cbPalette) +
+#   labs(y = "Number of Publications", x = "Level of Evidence") +
+#   guides(fill=guide_legend(title = "IM Nailing Focus")) +
+#   myTheme + theme(
+#     axis.title.x = element_text(size = 15),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     legend.position = c(0.225, 0.6),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 11),
+#     legend.margin = margin(2,2,2,2),
+#     legend.key.size = unit(0.5,"cm"))
+
+xSize <-  11
+ySize <- 11
+axisSize <- 9
+legendSize <- 7
+keySize <- 0.25
+
+## 3x3 sizing
+p <- shortData %>% 
+  filter(loe != "NA") %>% 
+  ggplot(aes(x = loe, fill = focus)) + 
+  geom_bar(stat = 'count', width = 0.45) +
+  geom_text(
+    data = totals, aes(x = loe, label = per, y = total, fill = NULL), size = 2.5, nudge_x = 0, nudge_y = 2.5
+  ) +
+  scale_fill_manual(values=cbPalette) +
+  labs(y = "Number of Publications", x = "Level of Evidence") +
+  guides(fill=guide_legend(title = "IM Nailing Focus")) +
+  myTheme + theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = ySize),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    legend.position = c(0.225, 0.6),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.margin = margin(2,2,2,2),
+    legend.key.size = unit(keySize,"cm"))
+
+
+## save the plot
+fileName <- "level-of-evidence"
+
+setwd(path.fig)
+figWidth <- 3
+figHeight <- 3
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+### try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#    width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+# graph2vector(x = p, file = fileName, type = "PDF",
+#              width = figWidth, height = figHeight, fallback_resolution = 350)
+
+# graph2ppt(x = p, file = fileName,
+# width = figWidth, height = figHeight)
+
+# knitr::include_graphics(paste0(path.fig, "/level-of-evidence.png"))
+
+setwd(path.src)
+```
+\newpage
+
+### Nailing approach counts (Excl. Cadaveric)
+
+```{r nailingCounts}
+## for the nailing approach counts
+
+## split the covData
+covData <- covData %>% # remove the old rows
+  filter(Study.ID != "Carr 1991") %>% 
+  filter(Study.ID != "Schumaier 2018")
+
+covData <- covData %>% 
+  rbind(Carr1991.long.1, Carr1991.long.2, Schumaier2018.long.1, Schumaier2018.long.2) # bind the new rows
+
+nailing.approach.counts <- covData %>% 
+  select(Study.ID, Study.design, Approach.1, Approach.2, Approach.3, Total.number.of.participants, Approach1.Total, Approach2.Total, Approach3.Total)
+
+newCols <- c("studyID", "Design", "Approach", "Freq")
+
+nail.counts1 <- nailing.approach.counts %>% 
+  select(Study.ID, Study.design, Approach.1, Approach1.Total) %>% 
+  `colnames<-` (newCols)  ## special assignment for colnames
+nail.counts2 <- nailing.approach.counts %>% 
+  select(Study.ID, Study.design, Approach.2, Approach2.Total) %>% 
+  `colnames<-` (newCols)
+nail.counts3 <- nailing.approach.counts %>% 
+  select(Study.ID, Study.design, Approach.3, Approach3.Total) %>% 
+  `colnames<-` (newCols)
+
+nail.counts <- rbind(nail.counts1, nail.counts2, nail.counts3)
+
+nail.counts$Approach <- as.factor(nail.counts$Approach)
+
+totals <- nail.counts %>% 
+  filter(Approach != "NA") %>% # remove NAs
+  filter(Design != "Cadaveric") %>%
+  # filter(Design == "Cadaveric") %>% 
+  group_by(Approach) %>%
+  summarise(total = sum(Freq, na.rm=T)) %>% # sum doesn't work with NA counts
+  mutate(
+    generalApproach = case_when(
+      str_detect(Approach, "IPN") ~ "IPN",
+      str_detect(Approach, "SPN") ~ "SPN",
+      str_detect(Approach, "Semi") ~ "Semi-extended",
+      str_detect(Approach, "No description") ~ "ND"
+    )
+  )
+
+totals$generalApproach <- as.factor(totals$generalApproach)
+
+# totals %>% 
+#   ggplot(aes(x = generalApproach, y = total, fill = Approach, label = total))+
+#   geom_bar(stat = "identity") +
+#   geom_text(size = 3, position = position_stack(vjust = 0.5))+
+#   # scale_fill_manual(values=cbPalette) +
+#   labs(y = "Number of Participants", x = "General Approach") +
+#   guides(fill=guide_legend(title = "Specific Approach")) +
+# 	myTheme
+#   # geom_bar(position="stack", stat="identity")
+
+totals <- totals %>% 
+  select(generalApproach, Approach, total)
+
+totals %>% 
+  kbl(booktabs = T) %>% 
+  collapse_rows(columns = 1)
+
+# totals.invivo <- totals
+
+totals.invivo <- totals %>% 
+  rename(c("n, in vivo" = "total"))
+
+```
+
+\newpage
+
+### Nailing approach counts (Cadaveric)
+
+
+```{r nailingCountsCadaveric}
+## for the nailing approach counts
+nailing.approach.counts <- covData %>% 
+  select(Study.ID, Study.design, Approach.1, Approach.2, Approach.3, Total.number.of.participants, Approach1.Total, Approach2.Total, Approach3.Total)
+
+newCols <- c("studyID", "Design", "Approach", "Freq")
+
+nail.counts1 <- nailing.approach.counts %>% 
+  select(Study.ID, Study.design, Approach.1, Approach1.Total) %>% 
+  `colnames<-` (newCols)  ## special assignment for colnames
+nail.counts2 <- nailing.approach.counts %>% 
+  select(Study.ID, Study.design, Approach.2, Approach2.Total) %>% 
+  `colnames<-` (newCols)
+nail.counts3 <- nailing.approach.counts %>% 
+  select(Study.ID, Study.design, Approach.3, Approach3.Total) %>% 
+  `colnames<-` (newCols)
+
+nail.counts <- rbind(nail.counts1, nail.counts2, nail.counts3)
+
+nail.counts$Approach <- as.factor(nail.counts$Approach)
+
+totals <- nail.counts %>% 
+  filter(Approach != "NA") %>% # remove NAs
+  filter(Design == "Cadaveric") %>%
+  group_by(Approach) %>%
+  summarise(total = sum(Freq, na.rm=T)) %>% # sum doesn't work with NA counts
+  mutate(
+    generalApproach = case_when(
+      str_detect(Approach, "IPN") ~ "IPN",
+      str_detect(Approach, "SPN") ~ "SPN",
+      str_detect(Approach, "Semi") ~ "Semi-extended",
+      str_detect(Approach, "No description") ~ "ND"
+    )
+  )
+
+totals$generalApproach <- as.factor(totals$generalApproach)
+
+# totals %>% 
+#   ggplot(aes(x = generalApproach, y = total, fill = Approach, label = total))+
+#   geom_bar(stat = "identity") +
+#   geom_text(size = 3, position = position_stack(vjust = 0.5))+
+#   # scale_fill_manual(values=cbPalette) +
+#   labs(y = "Number of Participants", x = "General Approach") +
+#   guides(fill=guide_legend(title = "Specific Approach")) +
+# 	myTheme
+#   # geom_bar(position="stack", stat="identity")
+
+totals <- totals %>% 
+  select(generalApproach, Approach, total)
+
+totals %>% 
+  kbl(booktabs = T) %>% 
+  collapse_rows(columns = 1)
+
+totals.cad <- totals %>% 
+  rename(c("n, cadaveric" = "total"))
+
+## for some reason there is a NA line with azero count so we can drop this by doing:
+totals.cad <- totals.cad %>% 
+  na_if("NA") %>% 
+  drop_na()
+
+
+#### need to run and check the R sript combine_invivo_cadaveric_nailCounts.R
+```
+
+<!-- \newpage -->
+
+<!-- ### Number of each study design and number of participants -->
+<!-- (Incl. Cadaveric) -->
+
+```{r participants}
+participants.df <- covData %>% 
+  select(Study.design, Total.number.of.participants) 
+
+colnames(participants.df) <- c("design", "participants")
+
+# write out all the offending strings
+na_strings <- c("NR", "NA", "N A", "N / A", "N/A", "N/ A", "Not Available", "NOt available")
+
+participants.df <- participants.df %>%
+  replace_with_na_all(condition = ~.x %in% na_strings)
+
+participants.df$participants <- as.numeric(participants.df$participants)
+
+participants.df <- participants.df %>%  
+  # filter(design != "Cadaveric") %>% 
+  group_by(design) %>% 
+  summarise(nStudies = n(),
+            Mean = round(mean(participants), 1), SD = round(sd(participants),  1)) %>% 
+  arrange(desc(nStudies))
+
+kableColNames <- c("Study Design", "No. Publications", "Mean", "SD")
+#    
+# participants.df %>%
+#   kbl(col.names = kableColNames) %>%
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+#   add_header_above(c(" " = 2, "No. Total Cohort" = 2))
+
+```
+
+\newpage
+
+### Follow-up times
+(Excl. Cadaveric)
+
+```{r followUps}
+followUp <- covData %>% 
+  select(Study.ID, Study.design, Follow.up.time.s..time1, Follow.up.time.s..time2, Follow.up.time.s..time3, Follow.up.time.s..time4) %>% 
+  separate_rows(Study.design, sep = ", ") %>%
+  filter(Study.design != "Cadaveric")
+
+
+colnames(followUp) <- c("ID", "design", "t1", "t2", "t3", "t4")
+
+followUp <- replace_with_na_at(data = followUp,
+                               .vars = c("t1", "t2", "t3", "t4"),
+                               condition = ~.x %in% c("NA", "NR", ""))
+
+# combine the follow-up times into one collumn
+followList <- data.frame(design = followUp$design,
+                         times = paste(followUp$t1, followUp$t2, followUp$t3, followUp$t4, sep = ","))
+
+followList <- followList %>% 
+  separate_rows(times, sep = ",") %>%  
+  na_if("NA") %>% 
+  drop_na()
+
+followList$times <- as.numeric(followList$times)
+
+## original 5 x 5 
+# p <- followList %>%
+#   ggplot(aes(x = times, fill = design)) +
+#   geom_histogram(
+#     color="white",
+#     binwidth = 0.5
+#   ) +
+#   scale_fill_manual(values=cbPalette) +
+#   labs(y = "Number of Publications",
+#        x = "Follow-up Time (months*)"
+#        # caption = "*log2 scale"
+#   ) +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myFollowTheme + theme(
+#     axis.title.x = element_text(size = 15),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     # plot.caption = element_text(size = 11)
+#     legend.position = c(0.79, 0.85),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 10),
+#     legend.margin = margin(2,2,2,2),
+#     legend.key.size = unit(0.5,"cm"),
+#     legend.spacing.x = unit(0.1, 'cm')) +
+#   scale_x_continuous(trans = 'log2',
+#                      # breaks = c(0.5, 300)
+#                      # breaks = c(0.5, 1, 2, 4, 8, 16, 32, 64, 128),
+#                      # labels = as.character(c(0.5, 1, 2, 4 ,8, 16, 32, 64, 128))
+#                      
+#                      # breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128),
+#                      # labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128))
+#                      
+#                      # breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512),
+#                      # labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128, "", 256, "", 512))
+#                      
+#                      breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512),
+#                      labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128, "", 256, "", 512))
+#                      
+#                      
+#   )+
+#   ylim(0,35) 
+
+
+xSize <-  11
+ySize <- 11
+axisSize <- 9
+legendSize <- 6
+keySize <- 0.25
+
+## original 3 x 3 
+p <- followList %>%
+  ggplot(aes(x = times, fill = design)) +
+  geom_histogram(
+    color="white",
+    binwidth = 0.5
+  ) +
+  scale_fill_manual(values=cbPalette) +
+  labs(y = "Number of Publications",
+       x = "Follow-up Time (months*)"
+       # caption = "*log2 scale"
+  ) +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myFollowTheme + theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = ySize),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    # plot.caption = element_text(size = 11)
+    legend.position = c(0.793, 0.85),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.margin = margin(1,1,1,1),
+    legend.key.size = unit(keySize,"cm"),
+    legend.spacing.x = unit(0.05, 'cm')) +
+  scale_x_continuous(trans = 'log2',
+                     # breaks = c(0.5, 300)
+                     # breaks = c(0.5, 1, 2, 4, 8, 16, 32, 64, 128),
+                     # labels = as.character(c(0.5, 1, 2, 4 ,8, 16, 32, 64, 128))
+                     
+                     # breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128),
+                     # labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128))
+                     
+                     # breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512),
+                     # labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128, "", 256, "", 512))
+                     
+                     breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512),
+                     labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128, "", 256, "", 512))
+                     
+                     
+  )+
+  ylim(0,35) 
+
+## save the plot
+fileName <- "follow-up-times"
+figHeight <- 3
+figWidth <- 3
+
+setwd(path.fig)
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+## try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2vector(x = p, file = fileName, type = "PDF",
+             width = figWidth, height = figHeight, fallback_resolution = 350)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+
+
+## aaos sizing
+# p <- followList %>% 
+#   ggplot(aes(x = times, fill = design)) + 
+#   geom_histogram(
+#     color="white",
+#     binwidth = 0.5
+#   ) +
+#   scale_fill_manual(values=cbPalette,
+#                     labels = c("Case control study", 
+#                                "Case series", 
+#                                "Prospective cohort study", 
+#                                "Randomised controlled trial", 
+#                                "Retrospective cohort study")
+#   ) + 
+#   labs(y = "Number of Publications", 
+#        x = "Follow-up Time (months*)",
+#        caption = "Fig. 5: Follow-up times by study design. *log2 scale") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myFollowTheme + theme(
+#     axis.title.x = element_text(size = smallText+2),
+#     axis.title.y = element_text(size = smallText+2),
+#     axis.text.x = element_text(size = smallText),
+#     axis.text.y = element_text(size = smallText),
+#     plot.caption = element_text(size = 6),
+#     legend.title = element_text(size = smallText-1),
+#     legend.text = element_text(size = smallText-1),
+#     legend.position = c(0.79, 0.85),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.key.size = unit(0.2,"cm"),
+#     legend.key.height = unit(0.15, "cm"),
+#     legend.key.width =unit(0.15, "cm")) +
+#   scale_x_continuous(trans = 'log2',
+#                      # breaks = trans_breaks("log2", function(x) 2^x),
+#                      # labels = trans_format("log2", math_format(2^.x))
+#                      
+#                      # breaks = c(0.5, 1, 2, 4, 8, 16, 32, 64, 128),
+#                      # labels = as.character(c(0.5, 1, 2, 4 ,8, 16, 32, 64, 128))
+#                      
+#                      breaks = c(0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512),
+#                      labels = as.character(c(0.5, "", 1, "", 2, "", 4, "", 8, "", 16, "", 32, "", 64, "", 128, "", 256, "", 512))
+#   ) +
+#   ylim(0,35) #+ 
+# xlim(0,300)
+
+# p
+
+# ggsave(
+#   "followUpTimesAAOS.jpg",
+#   plot = p,
+#   # device = NULL,
+#   # path = path.fig,
+#   path = path.aaos,
+#   # scale = 0.7,
+#   # width = 609,
+#   # height = figHeight.5,
+#   width = 3,
+#   height = 3,
+#   # units = "px",
+#   dpi = 350
+# )
+
+
+
+
+knitr::include_graphics(paste0(path.fig, "/follow-up-times.png"))
+
+setwd(path.src)
+
+```
+
+<!-- \newpage -->
+
+<!-- ### Approach used -->
+<!-- (Incl. Cadaveric) -->
+
+```{r nailProcedure}
+nailProcedure <- data.frame(Approach = c(shortData$a1, shortData$a2, shortData$a3)) %>%
+  separate_rows(Approach, sep = ", ") %>% 
+  na_if("NA") %>% 
+  drop_na() %>% 
+  group_by(Approach) %>%
+  summarise(n = n()) %>% 
+  arrange(desc(n))
+
+# nailProcedure %>%
+#   kbl() %>%
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+\newpage
+
+### Descriptions of
+(Excl. Cadaveric)
+
+```{r descriptions}
+
+description.df <- covData
+
+description.df <- description.df %>% 
+  filter(Study.design != "Cadaveric")
+
+
+Labels = c("Case control\nstudy",
+           "Case report\n",
+           "Case series\n",
+           "Prospective\ncohort study",
+           "Randomised\ncontrolled trial",
+           "Retrospective\ncohort study")
+
+
+#### 5x5 sizing ##########################################################
+# perSize <- 3.5
+# perNudge_y <- 5
+# 
+# ## helper function to get the percent counts
+# ## can use {{...}} in the function with dplyr to access a specific column of a dataframe by simply using double curly braces {{...}}
+# descriptionPercentCounter <- function(description.df, selectedVar){
+#   totals <- description.df %>%
+#     select({{selectedVar}}, Study.design) %>%
+#     group_by({{selectedVar}}) %>%
+#     summarise(total = n())
+#   totals <- totals %>%
+#     # mutate(per = paste0(total, " (", round(total / n.invivo * 100, 0), "%)"))
+#     mutate(per = paste0("(", round(total / n.invivo * 100, 0), "%)"))
+# 
+#   return(totals)
+# 
+# }
+# 
+# totals <- descriptionPercentCounter(description.df, Locking.description)
+# p1 <- description.df %>%
+#   ggplot(aes(x = Locking.description, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Locking.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Locking") +
+#   labs(y = NULL, x = "(a) Locking\n") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# # theme_clean() +
+# # theme_update(panel.border = element_blank())
+# 
+# totals <- descriptionPercentCounter(description.df, Fracture.description.location)
+# p2 <- description.df %>%
+#   ggplot(aes(x = Fracture.description.location, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Fracture.description.location, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Fracture\ntype / location") +
+#   labs(y = NULL, x = "(b) Fracture\ntype / location") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# # theme_clean() +
+# # theme_update(panel.border = element_blank())
+# 
+# totals <- descriptionPercentCounter(description.df, Open.closed.fracture.description)
+# p3 <- description.df %>%
+#   ggplot(aes(x = Open.closed.fracture.description, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Open.closed.fracture.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Open / closed") +
+#   labs(y = NULL, x = "(c) Open /\nclosed") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# # theme_clean() +
+# # theme_update(panel.border = element_blank())
+# 
+# totals <- descriptionPercentCounter(description.df, Reamed.description)
+# p4 <- description.df %>%
+#   ggplot(aes(x = Reamed.description, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Reamed.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Reaming") +
+#   labs(y = NULL, x = "(d) Reaming\n") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# # theme_clean() +
+# # theme_update(panel.border = element_blank())
+# 
+# totals <- descriptionPercentCounter(description.df, Post.op.weight.bearing.regime.description)
+# p5 <- description.df %>%
+#   ggplot(aes(x = Post.op.weight.bearing.regime.description, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Post.op.weight.bearing.regime.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Post-op\nweight-bearing") +
+#   labs(y = NULL, x = "(e) Post-op\nweight-bearing") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# # theme_clean() +
+# # theme_update(panel.border = element_blank())
+# 
+# totals <- descriptionPercentCounter(description.df, Mechanism.of.injury.description)
+# p6 <- description.df %>%
+#   ggplot(aes(x = Mechanism.of.injury.description, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Mechanism.of.injury.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Mechanism\nof injury") +
+#   labs(y = NULL, x = "(f) Mechanism\nof injury") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# # theme_clean() +
+# # theme_update(panel.border = element_blank())
+# 
+# totals <- descriptionPercentCounter(description.df, Nail.removal)
+# p7 <- description.df %>%
+#   ggplot(aes(x = Nail.removal, fill = Study.design)) +
+#   geom_bar(stat = 'count') +
+#   scale_fill_manual(values=cbPalette, labels = Labels) +
+#   geom_text(
+#     data = totals, aes(x = Nail.removal, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+#   ) +
+#   # labs(y = " ", x = "Nail removal") +
+#   labs(y = NULL, x = "(g) Nail removal\n") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   myTheme + theme(plot.background = element_rect(fill = "transparent", color = NA)) # bg of the plot)
+# 
+# # p = (p1 | p2 | p3) / (p4 | p5 | p6)
+# 
+# ## original
+# # patchwork = (p1 | p2 | p3 | p4) / (p5 | p6 | p7 | plot_spacer())
+# 
+# 
+# ## aaos # can specify the layout here and
+# design <- "
+# 1234
+# 5678
+# "
+# # patchwork = p1 + p2 + p3 + p4 + p5 + p6 + p7 + guide_area() +
+# #   plot_annotation(
+# #     caption = "Fig. 4: Distributions of IM nailing study characteristics."
+# #   )
+# patchwork = p1 + p2 + p3 + p4 + p5 + p6 + p7 + guide_area()
+# # patchwork = (p1 | p2 | p3 | p4) / (p5 | p6 | p7 | plot_spacer())
+# 
+# # p + plot_layout(guides = "collect") + myTheme +
+# #   theme(legend.position = c(1, 1))
+# 
+# 
+# ## originial
+# p <- patchwork +
+#   # plot_annotation(tag_levels = 'a',
+#   #                 tag_prefix = '(',
+#   #                 tag_suffix = ')') +
+#   plot_layout(design = design, guides = "collect")  &
+#   # plot_layout(guides = "collect")  &
+#   theme(
+#     # plot.tag.position = c(.01, 1.1),
+#     # legend.position = c(1, 1),
+#     # axis.title.x = element_text(size = 12),
+#     # axis.title.y = element_text(size = 12),
+#     # axis.text.x = element_text(size = 9),
+#     # axis.text.y = element_text(size = 9),
+# 
+#     axis.title.x = element_text(size = 12),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     # plot.caption = element_text(size = 11)
+#     # legend.position = c(0.79, 0.85),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 10),
+#     # legend.margin = margin(2,2,2,2),
+#     legend.key.size = unit(0.5,"cm"),
+#     legend.spacing.x = unit(0.1, 'cm')
+#   )
+# 
+# p
+# 
+# ## add text with grid.arrange ... this works saving to png, but not to svg
+# # result <- p
+# # gt <- patchwork::patchworkGrob(result)
+# # p <- gridExtra::grid.arrange(gt,
+# #                              left = textGrob("Number of Publications", gp = gpar(fontsize = 15), rot = 90)
+# # )
+# 
+# ## let's add an empty plot with patchwork
+# p_empty <- ggplot(data.frame()) + geom_blank() + ylab("Number of Publications") + theme(axis.title.y = element_text(size = 23))
+# 
+# setwd(path.fig)
+# ggsave(
+#   "temp_ylabel.png",
+#   plot = p_empty,
+#   path = path.fig,
+#   scale = 1,
+#   width = figWidth,
+#   height = 7,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 300
+# )
+# ggsave(
+#   "temp_patch.png",
+#   plot = p,
+#   path = path.fig,
+#   scale = 1,
+#   width = figWidth,
+#   height = 7,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 300
+# )
+# ## note this is saved as 2100x2100 image
+# 
+# ## now read in and crop
+# img_ylabel <- image_read(paste0(path.fig, "/temp_ylabel.png"))
+# img_patch <- image_read(paste0(path.fig, "/temp_patch.png"))
+# # myCroppedLabel <-  image_crop(img_ylabel, "90x2100")
+# myCroppedLabel <-  image_crop(img_ylabel, "100x2100")
+# # image_draw(myCroppedLabel)
+# myLabel <- image_ggplot(myCroppedLabel) # convert to ggplot2 object
+# myPatch <- image_ggplot(img_patch)
+# 
+# newPatch <- myLabel + p#myPatch
+
+## try with export package
+# graph2vector(#x = p,
+#              x = newPatch,
+#              file = fileName, type = "SVG",
+#              width = figWidth.3, height = 7)
+# 
+# graph2vector(x = newPatch, file = fileName, type = "EPS",
+#              width = figWidth.3, height = 7, fallback_resolution = 1200)
+# 
+# graph2ppt(#x = p,
+#           x = newPatch,
+#           file = fileName,
+#           width = figWidth, height = 7)
+
+
+## 3x3 sizing #################################################################
+perSize <- 2
+perNudge_y <- 7
+
+## helper function to get the percent counts
+## can use {{...}} in the function with dplyr to access a specific column of a dataframe by simply using double curly braces {{...}}
+descriptionPercentCounter <- function(description.df, selectedVar){
+  totals <- description.df %>%
+    select({{selectedVar}}, Study.design) %>%
+    group_by({{selectedVar}}) %>%
+    summarise(total = n())
+  totals <- totals %>%
+    mutate(per = paste0("(", round(total / n.invivo * 100, 0), "%)"))
+
+  return(totals)
+
+}
+
+patchTheme <- theme(plot.background = element_rect(fill = "transparent", color = NA), # bg of the plot)
+                    plot.margin = margin(t = 0,  # Top margin
+                             r = 0,  # Right margin
+                             b = 0,  # Bottom margin
+                             l = 0)) # Left margin
+
+totals <- descriptionPercentCounter(description.df, Locking.description)
+p1 <- description.df %>%
+  ggplot(aes(x = Locking.description, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Locking.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(a) Locking\n") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+totals <- descriptionPercentCounter(description.df, Fracture.description.location)
+p2 <- description.df %>%
+  ggplot(aes(x = Fracture.description.location, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Fracture.description.location, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(b) Fracture\ntype / location") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+totals <- descriptionPercentCounter(description.df, Open.closed.fracture.description)
+p3 <- description.df %>%
+  ggplot(aes(x = Open.closed.fracture.description, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Open.closed.fracture.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(c) Open /\nclosed") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+totals <- descriptionPercentCounter(description.df, Reamed.description)
+p4 <- description.df %>%
+  ggplot(aes(x = Reamed.description, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Reamed.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(d) Reaming\n") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+totals <- descriptionPercentCounter(description.df, Post.op.weight.bearing.regime.description)
+p5 <- description.df %>%
+  ggplot(aes(x = Post.op.weight.bearing.regime.description, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Post.op.weight.bearing.regime.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(e) Post-op\nweight-bearing") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+totals <- descriptionPercentCounter(description.df, Mechanism.of.injury.description)
+p6 <- description.df %>%
+  ggplot(aes(x = Mechanism.of.injury.description, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Mechanism.of.injury.description, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(f) Mechanism\nof injury") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+totals <- descriptionPercentCounter(description.df, Nail.removal)
+p7 <- description.df %>%
+  ggplot(aes(x = Nail.removal, fill = Study.design)) +
+  geom_bar(stat = 'count') +
+  scale_fill_manual(values=cbPalette, labels = Labels) +
+  geom_text(
+    data = totals, aes(x = Nail.removal, label = per, y = total, fill = NULL), size = perSize, nudge_x = 0, nudge_y = perNudge_y
+  ) +
+  labs(y = NULL, x = "(g) Nail removal\n") +
+  guides(fill = guide_legend(title = "Study Design")) +
+  myTheme + patchTheme
+
+# can specify the layout here
+design <- "
+1234
+5678
+"
+patchwork = p1 + p2 + p3 + p4 + p5 + p6 + p7 + guide_area()
+
+xSize <-  7
+ySize <- 6
+axisSize <- 6
+legendSize <- 6
+keySize <- 0.25
+
+p <- patchwork +
+  plot_layout(design = design, guides = "collect")  &
+  theme(
+    axis.title.x = element_text(size = xSize),
+    # axis.title.y = element_text(size = ySize),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.margin = margin(1,1,1,1),
+    legend.key.size = unit(keySize,"cm"),
+    legend.spacing.x = unit(0.01, 'cm')
+  )
+
+p
+
+
+## let's add an empty plot with patchwork
+p_empty <- ggplot(data.frame()) + geom_blank() + ylab("Number of Publications") + theme(axis.title.y = element_text(size = 14))
+
+setwd(path.fig)
+ggsave(
+  "temp_ylabel.png",
+  plot = p_empty,
+  path = path.fig,
+  scale = 1,
+  width = 3,
+  height = 3,
+  dpi = 500
+)
+ggsave(
+  "temp_patch.png",
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = 3,
+  height = 3,
+  dpi = 500
+)
+## note this is saved as 900x900 image
+
+## now read in and crop
+img_ylabel <- image_read(paste0(path.fig, "/temp_ylabel.png"))
+img_patch <- image_read(paste0(path.fig, "/temp_patch.png"))
+# myCroppedLabel <-  image_crop(img_ylabel, "90x2100")
+myCroppedLabel <-  image_crop(img_ylabel, "120x1500")
+# image_draw(myCroppedLabel)
+myLabel <- image_ggplot(myCroppedLabel) # convert to ggplot2 object
+myPatch <- image_ggplot(img_patch)
+
+newPatch <- myLabel + p#myPatch
+
+
+
+
+figHeight <-  3
+figWidth <- 3.24
+## save the plot
+fileName <- "CharacteristicDescriptions_largerY"
+# fileName <- "CharacteristicDescriptions"
+ggsave(
+  paste0(fileName,".png"),
+  # plot = p,
+  plot = newPatch,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  # height = 7,
+  # width = 1620,
+  height = figHeight,
+  # units = "px",
+  dpi = 300#500
+)
+
+# figHeight <-  3
+# figWidth <- 3.24
+### try with export package
+# graph2vector(#x = p,
+#              x = newPatch,
+#              file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = newPatch, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2ppt(#x = p,
+          x = newPatch,
+          file = fileName,
+          width = figWidth, height = figHeight)
+
+file.remove(paste0(path.fig, "/temp_ylabel.png"))
+file.remove(paste0(path.fig, "/temp_patch.png"))
+
+
+# ggsave(
+#   "DescriptionsOf.png",
+#   plot = p,
+#   # device = NULL,
+#   path = path.fig,
+#   scale = 1,
+#   width = figWidth,
+#   height = figHeight,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 350
+# )
+
+
+## aaos sizing
+
+# p <- patchwork +
+#   # plot_annotation(tag_levels = 'a',
+#   #                 tag_prefix = '(',
+#   #                 tag_suffix = ')') +
+#   plot_layout(design = design, guides = "collect")  &
+#   theme(#plot.tag.position = c(.01, 1),
+#     axis.title.x = element_text(size = smallText+1),
+#     axis.title.y = element_text(size = smallText+1),
+#     axis.text.x = element_text(size = smallText),
+#     axis.text.y = element_text(size = smallText),
+#     plot.caption = element_text(size = 6),
+#     legend.title = element_text(size = smallText-1),
+#     legend.text = element_text(size = smallText-1),
+#     legend.margin = margin(2, 2, 2, 2),
+#     # legend.position = "top",
+#     # legend.position = c(0, 0),
+#     # legend.position = c(0.79, 0.85),
+#     legend.key.size = unit(0.2,"cm"),
+#     legend.key.height = unit(0.15, "cm"),
+#     legend.key.width =unit(0.15, "cm"))
+# 
+# p
+
+# ggsave(
+#   "descriptionsAAOS.jpg",
+#   plot = p,
+#   # device = NULL,
+#   # path = path.fig,
+#   path = path.aaos,
+#   # scale = 0.7,
+#   # width = 609,
+#   # height = figHeight.5,
+#   width = 3,
+#   height = 3,
+#   # units = "px",
+#   dpi = 350
+# )
+
+
+
+# knitr::include_graphics(paste0(path.fig, "/DescriptionsOf.png"))
+
+setwd(path.src)
+
+```
+
+\newpage
+
+### Clincal Outcomes Used
+(Excl. Cadaveric)
+
+```{r clincalOutcomes}
+# tidy the data for the outcomes
+outcomes.df <- shortData %>% 
+  separate_rows(outcomes, sep = "; ") %>% 
+  separate_rows(outcomes, sep = ", ") %>% 
+  mutate(across(where(is.character), trimws)) %>%  # remove whitespace
+  filter(design != "Cadaveric") 
+
+outcomes.df$outcomes <- as.factor(outcomes.df$outcomes)
+
+outcomes.clinical.df <- outcomes.df
+
+
+#### Plot all together ####
+# get total count of each outcome measure
+# totals <- outcomes.df %>%
+#   group_by(outcomes) %>%
+#   summarise(total = n())
+# 
+# outcomes.df %>% 
+#   ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = design)) + 
+# 	geom_bar(stat = 'count') +
+#   geom_text(data = totals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 2, nudge_x = 0.5, nudge_y = 0.1) + 
+#   # geom_bar(stat = 'count', position = position_dodge(height=0.2)) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", x = "Number of Publications") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   # scale_y_discrete(guide = guide_axis(n.dodge = 3)) +
+# theme_clean()
+
+#### Split by clinical / patient outcome ####
+
+# list clinical outcomes
+clinical.outcomes = c("Union", "Alignment", "Nail insertion location", "Surgery time", "Radiation dose", "Complications", 
+                      "Nail prominence", "Hospital stay", "Structure damage", "Blood loss", "Outerbridge scale", "RUST score", 
+                      "Insall-Salavati ratio", "Nail-apex distance", 
+                      "Patellofemoral joint (arthroscopy)", "Accuracy of fracture reduction", "Blackburne-Peel index", 
+                      "Caton-Deschamps ratio", "Fracture healing time", "Hardware prominence", "Hardware removal", "Infefction rate",
+                      "Irrigation time", "Kellgren-Lawrence", 
+                      "Nail termination point", "Patellar tendon ultrasound examination", "Patellofemoral arthritis", 
+                      "Patellofemoral joint (MRI)", "Patellofemoral joint damage (MRI)", "Patellofemoral MRI", "Saphenous nerve injury",
+                      "Staheli rotational profile", "Tibial slope", "Time to nail removal", "Additional fixation", 
+                      "Chondromalacia Patellae", "Infection",
+                      "Quality of reduction", "Reduction (Baumgaertner)", "Nail diameter", "Nail tip position", "Irrigation volume",
+                      "Infection rate", "Insall−Salvati ratio", "Patellofemoral joint damage (arthroscopy)", 
+                      "Sensory function of infrapatellar nerve", "Caton−Deschamps ratio", "Rotational deformity", "Shortening",
+                      "Hardware failure", "Reoperation", 
+                      "Time to full weight-bearing", "Johner & Wruhs criteria", "Bone grafting", "Compartment syndrome", 
+                      "Implant failure", "Anterior compartment pressure", "Chondral damage", "Exchange nailing", "Venous status", 
+                      "Ultrasound examination of fracture site", "Time to partial weight-bearing",
+                      "Thigh muscles' cross sectional area (MRI)", "Thigh circumference", "Thigh-foot angle", "Ligamentous examination",
+                      "Meniscal pathology testing", "Nerve damage", "Distal locking time", "Hardware exchange", "Hammer classification",
+                      "Lower extremity neurological status", "Patella-tendon shortening", "Revision nailing", "Signs of edema",
+                      "Authors' assessment", "Implant exchange", "Locking bolt failure", "Incision healing", 
+                      "Number of fluoroscopy procedures", "Use of blocking screws", "Skin incised for open reduction",
+                      "Superficial infection of infrapatellar incision", "Fracture end haematoma", 
+                      "Distal locking screw and tibiotalar joint tangent angle",
+                      "Number of distal interlocking screws", "Intraoperative capsular tears", "Loss of reduction",
+                      "Scar cosmesis (5-point Likert scale)", "Medical Consumption Questionnaire", "ROM", "Patellofemoral kinematics from CT")
+
+##  working without the "other" grouping
+# totals <- outcomes.clinical.df %>%
+#   filter(outcomes %in% clinical.outcomes) %>% 
+#   group_by(outcomes) %>%
+#   summarise(total = n())
+# 
+# outcomes.clinical.df %>% 
+#   filter(outcomes %in% clinical.outcomes) %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = focus)) + 
+# 	geom_bar(stat = 'count') +
+#   geom_text(data = totals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 2, nudge_x = 0.5, nudge_y = 0.1) + 
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", x = "Number of Publications") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+# 	myTheme
+
+
+### try with "other" grouping
+# with fct_collapse
+threshold <- 6 # Anything less than threshold is grouped as Other
+# threshold <- 6 # aaos
+
+n.invivo <- 152 # 139+8 = 147 + 5 new studies
+
+# + 1 cadaveric
+
+
+# reduced subset of the data
+other.grouped.df <- outcomes.clinical.df %>%
+  filter(outcomes %in% clinical.outcomes) %>%
+  select(focus, outcomes)
+
+# group and get the counts
+totals <- outcomes.clinical.df %>%
+  filter(outcomes %in% clinical.outcomes) %>%
+  group_by(outcomes) %>%
+  summarise(total = n())
+
+# anything with a count = 1, group as "Other"
+collapsedTotals <- totals %>%
+  count(outcomes = fct_collapse(as.character(outcomes), 
+                                Other = unique(as.character(outcomes)[total < threshold])),
+        wt = total, name = "total")
+
+## add the percent collumn
+collapsedTotals <- collapsedTotals %>% 
+  mutate(per = paste0(total, " (", round(total / n.invivo * 100, 0), "%)"))
+
+## but remove the % from the 'other count, know this is in the top position
+collapsedTotals$per[1] <- str_replace(collapsedTotals$per[1], " \\s*\\([^\\)]+\\)", "")
+
+## str_detect doesn't like brackets so need to escape these with a \\
+## so do some replacement
+checkStrings <- as.character(collapsedTotals$outcomes)
+checkStrings <- gsub("(", "\\(",checkStrings, fixed = TRUE) # "Fixed = TRUE" disables regex)
+checkStrings <- gsub(")", "\\)",checkStrings, fixed = TRUE)
+checkStrings <- paste0("^", checkStrings, "$") # Use anchors. ^ Asserts that we are at the start. $ Asserts that we are at the end.
+
+# do the replacements
+other.grouped.df <- other.grouped.df %>%
+  mutate(if_other = case_when(
+    # if the outcomes appear in the collapsed list, use them in the new collumn, if not they will go to "other
+    # need to create the pattern matching list here with OR | statements between each character vector
+    str_detect(as.character(other.grouped.df$outcomes), paste(checkStrings, collapse = "|")) ~ as.character(outcomes),
+    TRUE ~ "Other" # anything else goes to "other"
+  ))
+
+# ## 5x5 sizing
+# p <- other.grouped.df %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+#   geom_bar(stat = 'count') +
+#   ## display number count
+#   # geom_text(
+#   #   data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 3, nudge_x = 3, nudge_y = 0.02
+#   # ) +
+#   ## display percentage
+#   geom_text(
+#     data = collapsedTotals[-1, ], aes(x = total, label = per, y = outcomes, fill = NULL), size = 3.5, nudge_x = 12, nudge_y = 0.02
+#   ) +
+#   geom_text(
+#     data = collapsedTotals[1, ], aes(x = total, label = per, y = outcomes, fill = NULL), size = 3.5, nudge_x = 4, nudge_y = 0.02
+#   ) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", x = "Number of Publications") +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myThemeVert +
+#   theme(
+#     axis.title.x = element_text(size = 15),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     legend.position = c(0.67, 0.22),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 11),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.key.size = unit(0.5,"cm")
+#   ) +
+#   scale_x_continuous(expand = c(0, 0), limits = c(0, 110))
+# scale_x_continuous(expand = c(0, 0), limits = c(0, max(collapsedTotals$total)+2))
+
+## 3x3 sizing
+xSize <-  11
+ySize <- 11
+axisSize <- 7
+legendSize <- 6
+keySize <- 0.25
+smallNumSize <- 1.9
+p <- other.grouped.df %>%
+  ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+  geom_bar(stat = 'count') +
+  ## display number count
+  # geom_text(
+  #   data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 3, nudge_x = 3, nudge_y = 0.02
+  # ) +
+  ## display percentage
+  geom_text(
+    data = collapsedTotals[-1, ], aes(x = total, label = per, y = outcomes, fill = NULL), size = smallNumSize, nudge_x = 12, nudge_y = 0.02
+  ) +
+  geom_text(
+    data = collapsedTotals[1, ], aes(x = total, label = per, y = outcomes, fill = NULL), size = smallNumSize, nudge_x = 4, nudge_y = 0.02
+  ) +
+  scale_fill_manual(values = cbPalette) + # colourblind pallete
+  labs(y = "Outcome Measure", x = "Number of Publications") +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myThemeVert +
+  theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = xSize),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    legend.position = c(0.7, 0.22),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+    legend.key.size = unit(keySize,"cm")
+  ) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 110))
+
+
+figWidth <-  3
+figHeight <- 3
+
+## save the plot
+fileName <- "clinicalOutcomes"
+setwd(path.fig)
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+### try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+
+setwd(path.src)
+
+#### aaos ####
+# myThemeVert.aaos <- myThemeVert %+replace%
+#   theme(
+#     panel.grid.major.y = element_blank(),
+#     panel.grid.major.x = element_blank()
+#   )
+# 
+# p <- other.grouped.df %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+#   geom_bar(stat = 'count') +
+#   geom_text(
+#     data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 2, nudge_x = 3, nudge_y = 0.02
+#   ) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", 
+#        x = "Number of Publications",
+#        caption = "Fig. 3: Clinical outcomes used in in vivo studies.") +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myThemeVert.aaos + 
+#   theme(
+#     axis.title.x = element_text(size = smallText+2),
+#     axis.title.y = element_text(size = smallText+2),
+#     axis.text.x = element_text(size = smallText),
+#     axis.text.y = element_text(size = smallText),
+#     plot.caption = element_text(size = 6),
+#     legend.title = element_text(size = smallText),
+#     legend.text = element_text(size = smallText),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.position = c(0.7, 0.3),
+#     legend.key.size = unit(0.2,"cm"),
+#     legend.key.height = unit(0.2, "cm"),
+#     legend.key.width =unit(0.2, "cm")
+#   ) +
+#   scale_x_continuous(expand = c(0, 0), limits = c(0, 85))
+
+# ggsave(
+#   "clinicalOutcomesAAOS.jpg",
+#   plot = p,
+#   # device = NULL,
+#   # path = path.fig,
+#   path = path.aaos,
+#   # scale = 0.7,
+#   # width = 609,
+#   # height = figHeight.5,
+#   width = 3,
+#   height = 3,
+#   # units = "px",
+#   dpi = 350
+# )
+
+
+# knitr::include_graphics(paste0(path.fig, "/clinicalOutcomes.png"))
+
+```
+
+\newpage
+
+### Clinical Outcomes: 'Others' (Supplementary material) 
+
+```{r clinicalOutcomesOthers}
+# now plot the "Others"
+other.totals <- totals %>% 
+  filter(total < threshold)
+
+## 5x5 sizing 
+p <- other.grouped.df %>%
+  filter(if_other == "Other") %>%
+  ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = focus)) +
+  geom_bar(stat = 'count') +
+  # geom_text(data = other.totals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 4, nudge_x = 0.05, nudge_y = 0.02) +
+  scale_fill_manual(values = cbPalette) + # colourblind pallete
+  labs(y = "Outcome Measure", x = "Number of Publications") +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myThemeVert +
+  theme(
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.text.x = element_text(size = 9),
+    axis.text.y = element_text(size = 9),
+    legend.position = c(0.7, 0.3),
+    # legend.title = element_text(size = 11),
+    # legend.text = element_text(size = 11),
+    legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+    # legend.key.size = unit(0.5,"cm")
+  ) +
+  # scale_x_continuous(breaks = c(0,1,2))
+  scale_x_continuous(expand = c(0, 0), limits = c(0, max(other.totals$total)))
+
+
+
+
+figHeight <- 9.7
+figWidth <- 6.3
+
+
+## save the plot
+fileName <- "clinicalOtherOutcomes"
+setwd(path.fig)
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+### try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 500)
+
+graph2vector(x = p, file = fileName, type = "PDF",
+             width = figWidth, height = figHeight, fallback_resolution = 350)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+
+setwd(path.src)
+
+# ggsave(
+#   "clinicalOtherOutcomes.png",
+#   plot = p,
+#   # device = NULL,
+#   path = path.fig,
+#   scale = 1,
+#   width = figWidth,
+#   height = figHeight,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 350
+# )
+
+knitr::include_graphics(paste0(path.fig, "/clinicalOtherOutcomes.png"))
+```
+
+
+\newpage
+
+### Patient Outcomes Used
+(Excl. Cadaveric)
+
+```{r patientOutcomes}
+# ### working without "Other" category
+# totals <- outcomes.df %>%
+#   filter(!outcomes %in% clinical.outcomes) %>% 
+#   group_by(outcomes) %>%
+#   summarise(total = n())
+# 
+# outcomes.df %>% 
+#   filter(!outcomes %in% clinical.outcomes) %>%
+#   # ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = design)) + 
+#   ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = focus)) + 
+# 	geom_bar(stat = 'count') +
+#   geom_text(data = totals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 2, nudge_x = 0.5, nudge_y = 0.1) + 
+#   # geom_bar(stat = 'count', position = position_dodge(height=0.2)) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", x = "Number of Publications") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   # scale_y_discrete(guide = guide_axis(n.dodge = 3)) +
+# 	myTheme
+
+
+
+## need to do some string replacements here
+pattern = c("^VAS$", "Binary yes/no", "VAS \\(ND\\)")
+replacement = c("VAS - knee pain (0 - 10)", "Binary - knee pain", "VAS - knee pain (ND)")
+outcomes.df$outcomes <- as.character(outcomes.df$outcomes) %>% 
+  mgsub(pattern, replacement)
+
+
+### try with "other" grouping
+threshold <- 7 # Anything less than threshold is grouped as Other
+# threshold <- 7 # aaos
+
+# reduced subset of the data
+other.grouped.df <- outcomes.df %>%
+  filter(!outcomes %in% clinical.outcomes) %>%
+  select(focus, outcomes)
+
+# group and get the counts
+totals <- outcomes.df %>%
+  filter(!outcomes %in% clinical.outcomes) %>%
+  group_by(outcomes) %>%
+  summarise(total = n())
+
+# anything with a count = 1, group as "Other"
+collapsedTotals <- totals %>%
+  count(outcomes = fct_collapse(as.character(outcomes), 
+                                Other = unique(as.character(outcomes)[total < threshold])),
+        wt = total, name = "total")
+
+## add the percent collumn
+collapsedTotals <- collapsedTotals %>% 
+  mutate(per = paste0(total, " (", round(total / n.invivo * 100, 0), "%)"))
+
+# but remove the % from the 'other count, know this is in the top position
+collapsedTotals$per[1] <- str_replace(collapsedTotals$per[1], " \\s*\\([^\\)]+\\)", "")
+
+## str_detect doesn't like brackets so need to escape these with a \\
+## so do some replacement
+checkStrings <- as.character(collapsedTotals$outcomes)
+checkStrings <- gsub("(", "\\(",checkStrings, fixed = TRUE) # "Fixed = TRUE" disables regex)
+checkStrings <- gsub(")", "\\)",checkStrings, fixed = TRUE)
+checkStrings <- paste0("^", checkStrings, "$") # Use anchors. ^ Asserts that we are at the start. $ Asserts that we are at the end.
+
+# do the replacements
+other.grouped.df <- other.grouped.df %>%
+  mutate(if_other = case_when(
+    # if the outcomes appear in the collapsed list, use them in the new collumn, if not they will go to "other
+    # need to create the pattern matching list here with OR | statements between each character vector
+    str_detect(as.character(other.grouped.df$outcomes), paste(checkStrings, collapse = "|")) ~ as.character(outcomes),
+    TRUE ~ "Other" # anything else goes to "other"
+  ))
+
+## 5x5 sizing
+# p <- other.grouped.df %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+#   geom_bar(stat = 'count', width = 0.8) +
+#   ## add number count
+#   # geom_text(data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 3, nudge_x = 6, nudge_y = 0.02) +
+#   ## add percent and number count
+#   geom_text(data = collapsedTotals[-1,], aes(x = total, label = per, y = outcomes, fill = NULL), size = 3.5, nudge_x = 24, nudge_y = 0.02) +
+#   geom_text(data = collapsedTotals[1,], aes(x = total, label = per, y = outcomes, fill = NULL), size = 3.5, nudge_x = 8, nudge_y = 0.02) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(
+#     y = "Outcome Measure",
+#     x = "Number of Publications"#,
+#     # caption = "Fig.1: Patient outcomes used in in vivo studies. IPN - infrapatellar nailing;\nSE - semi-extended; NR - not reported; SPN - suprapatellar nailing;\nROM - range of movement; VAS - visual analogue score; ND - no description"
+#   ) +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myThemeVert +
+#   theme(
+#     axis.title.x = element_text(size = 15),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     legend.position = c(0.75, 0.5),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 11),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.key.size = unit(0.5,"cm")) +
+#   # scale_x_continuous(breaks = c(0,1,2)) +
+#   scale_x_continuous(expand = c(0, 0), limits = c(0, 195))
+# # scale_x_continuous(expand = c(0, 0), limits = c(0, max(collapsedTotals$total)+10))
+
+
+## 3x3 sizing
+xSize <-  11
+ySize <- 11
+axisSize <- 7
+legendSize <- 6
+keySize <- 0.25
+smallNumSize <- 1.9
+
+p <- other.grouped.df %>%
+  ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+  geom_bar(stat = 'count', width = 0.8) +
+  ## add number count
+  # geom_text(data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 3, nudge_x = 6, nudge_y = 0.02) +
+  ## add percent and number count
+  geom_text(data = collapsedTotals[-1,], aes(x = total, label = per, y = outcomes, fill = NULL), size = smallNumSize, nudge_x = 24, nudge_y = 0.02) +
+  geom_text(data = collapsedTotals[1,], aes(x = total, label = per, y = outcomes, fill = NULL), size = smallNumSize, nudge_x = 8, nudge_y = 0.02) +
+  scale_fill_manual(values = cbPalette) + # colourblind pallete
+  labs(
+    y = "Outcome Measure",
+    x = "Number of Publications"#,
+    # caption = "Fig.1: Patient outcomes used in in vivo studies. IPN - infrapatellar nailing;\nSE - semi-extended; NR - not reported; SPN - suprapatellar nailing;\nROM - range of movement; VAS - visual analogue score; ND - no description"
+  ) +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myThemeVert +
+  theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = ySize),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    legend.position = c(0.75, 0.2),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+    legend.key.size = unit(keySize,"cm")) +
+  # scale_x_continuous(breaks = c(0,1,2)) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 210))
+
+figWidth <- 3.2
+figHeight <- 3
+
+## save the plot
+setwd(path.fig)
+fileName <- "patientOutcomes"
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+### try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+
+setwd(path.src)
+
+## AAOS
+# myThemeVert.aaos <- myThemeVert %+replace%
+#   theme(
+#     panel.grid.major.y = element_blank(),
+#     panel.grid.major.x = element_blank()
+#   )
+# smallText <- 6.5
+# p <- other.grouped.df %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+#   geom_bar(stat = 'count', width = 0.8) +
+#   ## add number count
+#   geom_text(data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 2, nudge_x = 8, nudge_y = 0.02) +
+#   
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(
+#     y = "Outcome Measure", 
+#     x = "Number of Publications",
+#     caption = "Fig.2: Patient outcomes used in in vivo studies. IPN - infrapatellar nailing;\nSE - semi-extended; NR - not reported; SPN - suprapatellar nailing;\nROM - range of movement; VAS - visual analogue score; ND - no description"
+#   ) +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myThemeVert.aaos + 
+#   theme(
+#     axis.title.x = element_text(size = smallText+2),
+#     axis.title.y = element_text(size = smallText+2),
+#     axis.text.x = element_text(size = smallText),
+#     axis.text.y = element_text(size = smallText),
+#     plot.caption = element_text(size = 6),
+#     legend.title = element_text(size = smallText),
+#     legend.text = element_text(size = smallText),
+#     legend.position = c(0.7, 0.5),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.key.size = unit(0.2,"cm"),
+#     legend.key.height = unit(0.2, "cm"),
+#     legend.key.width =unit(0.2, "cm")) +
+#   # scale_x_continuous(breaks = c(0,1,2)) +
+#   scale_x_continuous(expand = c(0, 0), limits = c(0, max(collapsedTotals$total) + 15 ))
+# # scale_x_continuous(expand = c(0, 0), limits = c(0, max(collapsedTotals$total)+2))
+
+
+# ggsave(
+#   "patientOutcomes.png",
+#   plot = p,
+#   # device = NULL,
+#   path = path.fig,
+#   scale = 1,
+#   width = figWidth,
+#   height = figHeight,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 350
+# )
+
+# ggsave(
+#   "patientOutcomesAAOS.jpg",
+#   plot = p,
+#   # device = NULL,
+#   # path = path.fig,
+#   path = path.aaos,
+#   # scale = 0.7,
+#   # width = 609,
+#   # height = figHeight.5,
+#   width = 3,
+#   height = 3,
+#   # units = "px",
+#   dpi = 350
+# )
+
+# knitr::include_graphics(paste0(path.fig, "/patientOutcomes.png"))
+
+```
+
+### Patient Coutcomes: 'Other' (supplementary material)
+
+```{r patientOtherOutcomes}
+# now plot the "Others"
+other.totals <- totals %>% 
+  filter(total < threshold)
+
+xSize <-  11
+ySize <- 11
+axisSizeX <- 8
+axisSizeY <- 7
+legendSize <- 8
+keySize <- 0.25
+smallNumSize <- 1.9
+
+p <- other.grouped.df %>%
+  filter(if_other == "Other") %>% 
+  ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = focus)) +
+  geom_bar(stat = 'count') +
+  # geom_text(data = other.totals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 4, nudge_x = 0.1, nudge_y = 0.02) +
+  scale_fill_manual(values = cbPalette) + # colourblind pallete
+  labs(y = "Outcome Measure", x = "Number of Publications") +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myThemeVert + 
+  theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = ySize),
+    axis.text.x = element_text(size = axisSizeX),
+    axis.text.y = element_text(size = axisSizeY),
+    legend.position = c(0.7, 0.3),
+    legend.margin = margin(1.5, 1.5, 1.5, 1.5)
+  ) +
+  # scale_x_continuous(breaks = c(0,1,2))
+  scale_x_continuous(expand = c(0, 0), limits = c(0, max(other.totals$total)+1))
+
+## save the plot
+
+figWidth <- 6.3
+figHeight <- 10
+fileName <- "patientOtherOutcomes"
+setwd(path.fig)
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+### try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2vector(x = p, file = fileName, type = "PDF",
+             width = figWidth, height = figHeight, fallback_resolution = 350)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+setwd(path.src)
+# knitr::include_graphics(paste0(path.fig, "/patientOtherOutcomes.png"))
+
+```
+
+## year Outcomes
+
+```{r yearOutcomes}
+## original
+
+listOutcomesAboveThreshold <- collapsedTotals$outcomes[-1]
+plotData <- outcomes.df %>% 
+  # filter(!outcomes %in% clinical.outcomes) %>% 
+  filter(outcomes %in% listOutcomesAboveThreshold)
+
+p <- ggplot() +
+  geom_bar(data = plotData, aes(x = year, fill = outcomes), stat = 'count') +
+  # scale_fill_manual(values = cbPalette) +
+  labs(y = "Number of Publications", x = "Year of Publication") +
+  guides(fill = guide_legend(title = "Outcomes")) +
+  myTheme + theme(
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 11),
+    axis.text.y = element_text(size = 11),
+    # legend.position="none"
+    # legend.position = c(0.25, 0.65),
+    # # legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+    # legend.margin = margin(2, 2, 2, 2),
+    # legend.title = element_text(size = 11),
+    # legend.text = element_text(size = 11),
+    # legend.key.size = unit(0.5,"cm")
+  )
+p
+```
+
+
+\newpage
+
+### Cadaveric Outcomes Used
+
+```{r outcomes2}
+# tidy the data for the outcomes
+outcomes.cad.df <- shortData %>%
+  separate_rows(outcomes, sep = "; ") %>%
+  separate_rows(outcomes, sep = ", ") %>%
+  mutate(across(where(is.character), trimws)) %>%  # remove whitespace
+  filter(design == "Cadaveric")
+
+# Tidy up the strings
+outcomes.cad.df$outcomes <- outcomes.cad.df$outcomes %>%
+  str_replace_all(" \\(inspection post-dissection\\)", "") # remove instances of " (inspection post-dissection)"
+
+outcomes.cad.df$outcomes <- as.factor(outcomes.cad.df$outcomes)
+
+### try with "other" grouping
+# with fct_collapse
+threshold <- 3# Anything less than threshold is grouped as Other
+# threshold <- 2 # aaos
+
+n.cad <- 29 # 28 + 1
+
+# reduced subset of the data
+other.grouped.df <- outcomes.cad.df %>%
+  select(focus, outcomes)
+
+# group and get the counts
+totals <- outcomes.cad.df %>%
+  group_by(outcomes) %>%
+  summarise(total = n())
+
+# anything with a count = 1, group as "Other"
+collapsedTotals <- totals %>%
+  count(outcomes = fct_collapse(as.character(outcomes), 
+                                Other = unique(as.character(outcomes)[total < threshold])),
+        wt = total, name = "total")
+
+## add the percent collumn
+collapsedTotals <- collapsedTotals %>% 
+  mutate(per = paste0(total, " (", round(total / n.cad * 100, 0), "%)"))
+
+## but remove the % from the 'other count, know this is in the top position
+collapsedTotals$per[1] <- str_replace(collapsedTotals$per[1], " \\s*\\([^\\)]+\\)", "")
+
+## str_detect doesn't like brackets so need to escape these with a \\
+## so do some replacement
+checkStrings <- as.character(collapsedTotals$outcomes)
+checkStrings <- gsub("(", "\\(",checkStrings, fixed = TRUE) # "Fixed = TRUE" disables regex)
+checkStrings <- gsub(")", "\\)",checkStrings, fixed = TRUE)
+checkStrings <- paste0("^", checkStrings, "$") # Use anchors. ^ Asserts that we are at the start. $ Asserts that we are at the end.
+
+# do the replacements
+other.grouped.df <- other.grouped.df %>%
+  mutate(if_other = case_when(
+    # if the outcomes appear in the collapsed list, use them in the new collumn, if not they will go to "other
+    # need to create the pattern matching list here with OR | statements between each character vector
+    str_detect(as.character(other.grouped.df$outcomes), paste(checkStrings, collapse = "|")) ~ as.character(outcomes),
+    TRUE ~ "Other" # anything else goes to "other"
+  ))
+
+## 5x5 sizing
+# p <- other.grouped.df %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+#   geom_bar(stat = 'count') +
+#   # geom_text(data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 3, nudge_x = 1, nudge_y = 0.02) +
+#   geom_text(data = collapsedTotals, aes(x = total, label = per, y = outcomes, fill = NULL), size = 3.5, nudge_x = 6.5, nudge_y = 0.02) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", x = "Number of Publications") +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myThemeVert +
+#   theme(
+#     axis.title.x = element_text(size = 15),
+#     axis.title.y = element_text(size = 15),
+#     axis.text.x = element_text(size = 11),
+#     axis.text.y = element_text(size = 11),
+#     legend.title = element_text(size = 11),
+#     legend.text = element_text(size = 11),
+#     legend.margin = margin(2,2,2,2),
+#     legend.position = c(0.7, 0.25)
+#     # legend.key.size = unit(0.2,"cm"),
+#     # legend.key.height = unit(0.2, "cm"),
+#     # legend.key.width =unit(0.2, "cm")
+#   ) +
+#   scale_x_continuous(expand = c(0, 0), limits = c(0, 50))
+## scale_x_continuous(expand = c(0, 0), limits = c(0, max(collapsedTotals$total)+2))
+
+
+## 3x3 sizing
+xSize <-  11
+ySize <- 11
+axisSize <- 7
+legendSize <- 6
+keySize <- 0.25
+smallNumSize <- 1.9
+
+## save the plot
+fileName <- "cadavericOutcomes"
+p <- other.grouped.df %>%
+  ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+  geom_bar(stat = 'count') +
+  # geom_text(data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 3, nudge_x = 1, nudge_y = 0.02) +
+  geom_text(data = collapsedTotals, aes(x = total, label = per, y = outcomes, fill = NULL), size = smallNumSize, nudge_x = 5.5, nudge_y = 0.02) +
+  scale_fill_manual(values = cbPalette) + # colourblind pallete
+  labs(y = "Outcome Measure", x = "Number of Publications") +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myThemeVert +
+  theme(
+    axis.title.x = element_text(size = xSize),
+    axis.title.y = element_text(size = ySize),
+    axis.text.x = element_text(size = axisSize),
+    axis.text.y = element_text(size = axisSize),
+    legend.title = element_text(size = legendSize),
+    legend.text = element_text(size = legendSize),
+    legend.margin = margin(2,2,2,2),
+    legend.position = c(0.7, 0.2),
+    legend.key.size = unit(keySize,"cm")
+    # legend.key.size = unit(0.2,"cm"),
+    # legend.key.height = unit(0.2, "cm"),
+    # legend.key.width =unit(0.2, "cm")
+  ) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 50)) +
+  scale_y_discrete(labels = c("Fat pad damage" = "Fat pad damage", 
+                              "Intermeniscal ligament damage" = "Intermeniscal ligament\ndamage",
+                              "Anterior cruciate ligament damage" = "Anterior cruciate\nligament damage",
+                              "Articular surface damage" = "Articular surface\ndamage",
+                              "Menisci damage" = "Menisci damage",
+                              "Nail insertion location" = "Nail insertion\nlocation",
+                              "Other" = "Other"
+                              ))
+
+setwd(path.fig)
+
+figHeight <- 3
+figWidth <- 3
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+## try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+setwd(path.src)
+
+## aaos
+# p <- other.grouped.df %>%
+#   ggplot(aes(y = fct_rev(fct_infreq(if_other)), fill = focus)) +
+#   geom_bar(stat = 'count') +
+#   geom_text(data = collapsedTotals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 2, nudge_x = 2, nudge_y = 0.02) +
+#   scale_fill_manual(values = cbPalette) + # colourblind pallete
+#   labs(y = "Outcome Measure", 
+#        x = "Number of Publications",
+#        caption = "Fig. 6: Outcomes used in cadaveric studies.") +
+#   guides(fill = guide_legend(title = "IM Nailing Focus")) +
+#   myThemeVert.aaos + 
+#   theme(
+#     axis.title.x = element_text(size = smallText+2),
+#     axis.title.y = element_text(size = smallText+2),
+#     axis.text.x = element_text(size = smallText),
+#     axis.text.y = element_text(size = smallText),
+#     plot.caption = element_text(size = 6),
+#     legend.title = element_text(size = smallText),
+#     legend.text = element_text(size = smallText),
+#     legend.margin = margin(1.5, 1.5, 1.5, 1.5),
+#     legend.position = c(0.7, 0.3),
+#     legend.key.size = unit(0.2,"cm"),
+#     legend.key.height = unit(0.2, "cm"),
+#     legend.key.width =unit(0.2, "cm")) +
+#   scale_x_continuous(expand = c(0, 0), limits = c(0, 30))
+# 
+# ggsave(
+#   "cadavericOutcomesAAOS.jpg",
+#   plot = p,
+#   # device = NULL,
+#   # path = path.fig,
+#   path = path.aaos,
+#   # scale = 0.7,
+#   # width = 609,
+#   # height = figHeight.5,
+#   width = 3,
+#   height = 3,
+#   # units = "px",
+#   dpi = 350
+# )
+
+# ggsave(
+#   "cadavericOutcomes.png",
+#   plot = p,
+#   # device = NULL,
+#   path = path.fig,
+#   scale = 1,
+#   # width = figWidth.5,
+#   height = 2.5,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 350
+# )
+
+# knitr::include_graphics(paste0(path.fig, "/cadavericOutcomes.png"))
+
+## OLD
+# # get total count of each type
+# totals <- outcomes.cad.df %>%
+#   group_by(outcomes) %>%
+#   summarise(total = n())
+# 
+# outcomes.cad.df %>% 
+#   ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = focus)) + 
+# 	geom_bar(stat = 'count') +
+#   geom_text(data=totals, aes(x=total, label=total, y=outcomes, fill = NULL), size = 2, nudge_x=0.5, nudge_y=0.1) + 
+#   # geom_bar(stat = 'count', position = position_dodge(height=0.2)) +
+#   scale_fill_manual(values=cbPalette) +
+#   labs(y = "Outcome Measure", x = "Number of Publications") +
+#   guides(fill = guide_legend(title = "Study Design")) +
+#   # scale_y_discrete(guide = guide_axis(n.dodge=3)) +
+# 	myTheme
+
+```
+
+\newpage
+
+### Cadaveric 'other' (supplementary)
+
+```{r cadavericOthers}
+# now plot the "Others"
+other.totals <- totals %>% 
+  filter(total < threshold)
+
+
+## update theme
+myTheme.cadOther <- myThemeVert + theme(
+  axis.title.x = element_text(size = 12),
+  axis.title.y = element_text(size = 12),
+  axis.text.x = element_text(size = 9),
+  axis.text.y = element_text(size = 9))
+
+
+
+
+p <- other.grouped.df %>%
+  filter(if_other == "Other") %>% 
+  ggplot(aes(y = fct_rev(fct_infreq(outcomes)), fill = focus)) +
+  geom_bar(stat = 'count') +
+  ## turn off the number count display as it's low
+  # geom_text(data = other.totals, aes(x = total, label = total, y = outcomes, fill = NULL), size = 4, nudge_x = 0.05, nudge_y = 0.02) +
+  scale_fill_manual(values = cbPalette) + # colourblind pallete
+  labs(y = "Outcome Measure", x = "Number of Publications") +
+  guides(fill = guide_legend(title = "IM Nailing Focus")) +
+  myTheme.cadOther +
+  scale_x_continuous(breaks = c(0,1,2)) 
+# scale_x_continuous(expand = c(0, 0), limits = c(0, max(other.totals$total)+1))
+
+## save the plot
+fileName <- "cadavericOtherOutcomes"
+
+figWidth <- 6.3
+figHeight = 9.7
+
+setwd(path.fig)
+ggsave(
+  paste0(fileName,".png"),
+  plot = p,
+  path = path.fig,
+  scale = 1,
+  width = figWidth,
+  height = figHeight,
+  # units = c("in", "cm", "mm", "px"),
+  dpi = 350
+)
+
+## try with export package
+# graph2vector(x = p, file = fileName, type = "SVG",
+#              width = figWidth, height = figHeight)
+
+graph2vector(x = p, file = fileName, type = "EPS",
+             width = figWidth, height = figHeight, fallback_resolution = 1200)
+
+graph2vector(x = p, file = fileName, type = "PDF",
+             width = figWidth, height = figHeight, fallback_resolution = 350)
+
+graph2ppt(x = p, file = fileName,
+          width = figWidth, height = figHeight)
+
+setwd(path.src)
+
+
+# ggsave(
+#   "cadavericOtherOutcomes.png",
+#   plot = p,
+#   # device = NULL,
+#   path = path.fig,
+#   scale = 1,
+#   # width = figWidth.5,
+#   height = figHeight,
+#   # units = c("in", "cm", "mm", "px"),
+#   dpi = 350
+# )
+
+knitr::include_graphics(paste0(path.fig, "/cadavericOtherOutcomes.png"))
+```
+
+
+<!-- ### The lot -->
+
+```{r allData}
+# covData %>% 
+#   kbl() %>% 
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+```{r aaosInclusiontable}
+library(kableExtra)
+inc.exc.tab = data.frame(
+  InclusionCriteria = 
+    c(
+      "Intramedullary nail fixation",
+      "All suprapatellar and infrapatellar nailing approaches",
+      "Tibial shaft fractures",
+      "All populations", 
+      "All study designs (including cadaveric studies without presence of tibial shaft fracture)",
+      "Original work",
+      "English"
+    ),
+  ExclusionCriteria = 
+    c(
+      "Review articles",
+      "Non-tib shaft fracture",
+      "Open fractures only",
+      "Other fracture fixation",
+      "Intra-articular fractures",
+      "Nail removal only presented",
+      "Technical notes / technique description without a case series presented"
+      
+    )
+)
+# inc.exc.tab %>% kable("html",
+#                       # booktabs = T,
+#                       col.names =c("Inclusion Criteria", "Exclusion Criteria"),
+#                       caption = "<b>Table 1: Article screening inclusion and exclusion criteria</b>") %>%
+#   kable_styling(font_size = 14) %>%
+#   row_spec(0, color='black') %>%
+#   column_spec(1:2, color='black') %>%
+#   # as_image(width = 3,
+#   #          file = paste0(path.aaos, "/test.png"))
+#   save_kable(paste0(path.aaos, "/inclusion-exclusion.jpg"),
+#              zoom = 3)
+
+```
+
+
